@@ -1507,9 +1507,18 @@ async function doLogout() {
 }
 
 async function checkAccess(userId) {
-  const {data,error}=await sb.from('profiles').select('estado').eq('id',userId).single();
-  if(error||!data) return 'pendiente';
-  return data.estado;
+  try {
+    const { data, error } = await sb
+      .from('profiles')
+      .select('estado')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) { console.log('RLS error, checking metadata'); return 'pendiente'; }
+    if (!data) return 'pendiente';
+    return data.estado;
+  } catch(e) {
+    return 'pendiente';
+  }
 }
 
 function showApp() {
@@ -1517,14 +1526,34 @@ function showApp() {
   document.getElementById('pending-screen').style.display='none';
   document.getElementById('app-screen').style.display='block';
   document.getElementById('logout-floating').style.display='block';
-  // Inicializar dashboard si existe
-  if(typeof renderDashboard === 'function') renderDashboard();
+  if(typeof renderDashboard === 'function') setTimeout(renderDashboard, 100);
 }
 
 sb.auth.onAuthStateChange(async(event,session)=>{
   if(session){
-    const estado=await checkAccess(session.user.id);
-    if(estado==='aprobado'){
+    // Intentar verificar estado, con timeout de seguridad
+    let estado = 'pendiente';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      const res = await fetch(_SB_URL + '/rest/v1/profiles?select=estado&id=eq.' + session.user.id, {
+        headers: {
+          'apikey': _SB_ANON,
+          'Authorization': 'Bearer ' + session.access_token,
+          'Content-Type': 'application/json'
+        },
+        signal: controller.signal
+      });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const rows = await res.json();
+        if (rows && rows.length > 0) estado = rows[0].estado;
+      }
+    } catch(e) {
+      console.log('fetch error:', e.message);
+    }
+
+    if(estado === 'aprobado'){
       showApp();
     } else {
       document.getElementById('auth-screen').style.display='none';
